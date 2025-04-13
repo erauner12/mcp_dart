@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert'; // For utf8 encoding if needed
 import 'dart:io' as io; // Use 'io' prefix
 import 'dart:typed_data'; // For Uint8List
+
 // Potentially needed for kDebugMode, if not already imported transitively
 // import 'package:flutter/foundation.dart'; // Use kDebugMode
 
@@ -78,7 +79,7 @@ class StdioClientTransport implements Transport {
   /// Subscriptions to the process's stdout and stderr streams.
   StreamSubscription<List<int>>? _stdoutSubscription;
   StreamSubscription<List<int>>?
-      _stderrSubscription; // Only used if stderrMode is pipe
+  _stderrSubscription; // Only used if stderrMode is pipe
 
   /// Callback for when the connection (process) is closed.
   @override
@@ -134,7 +135,7 @@ class StdioClientTransport implements Transport {
         mode: mode, // Handles stdin/stdout/stderr piping/inheritance
       );
 
-      print("StdioClientTransport: Process started (PID: ${_process?.pid})");
+      print("StdioClientTransport: Process started (PID: \${_process?.pid})");
 
       // --- Setup stream listeners ---
 
@@ -152,9 +153,9 @@ class StdioClientTransport implements Transport {
           (data) {
             // Log stderr, potentially report as non-fatal error?
             final errorMsg = utf8.decode(data, allowMalformed: true);
-            print("Server stderr: $errorMsg");
+            print("Server stderr: \$errorMsg");
             // Optionally report stderr content via onerror
-            // _reportError(StateError("Server stderr: $errorMsg"));
+            // _reportError(StateError("Server stderr: \$errorMsg"));
           },
           onError: _onStreamError, // Report stderr stream errors too
           onDone: () {
@@ -174,10 +175,10 @@ class StdioClientTransport implements Transport {
 
     } catch (error, stackTrace) {
       // Handle errors during Process.start()
-      print("StdioClientTransport: Failed to start process: $error");
+      print("StdioClientTransport: Failed to start process: \$error");
       _started = false; // Reset state
       final startError = StateError(
-        "Failed to start server process: $error\n$stackTrace",
+        "Failed to start server process: \$error\n\$stackTrace",
       );
       _reportError(startError); // Use helper to report error
       await close(); // Attempt cleanup immediately on start failure
@@ -222,14 +223,14 @@ class StdioClientTransport implements Transport {
     // Ignore stream errors if we are already cleaning up, as they are expected
     if (_isCleaningUp) {
       print(
-        "StdioClientTransport: Stream error occurred during cleanup: $error",
+        "StdioClientTransport: Stream error occurred during cleanup: \$error",
       );
       return;
     }
-    print("StdioClientTransport: Stream error occurred: $error");
+    print("StdioClientTransport: Stream error occurred: \$error");
     final Error streamError = (error is Error)
         ? error
-        : StateError("Process stream error: $error\n$stackTrace");
+            : StateError("Process stream error: \$error\n\$stackTrace");
     _reportError(streamError);
     // Consider if stream errors should trigger close() - often yes
     unawaited(close());
@@ -244,20 +245,20 @@ class StdioClientTransport implements Transport {
         try {
           onmessage?.call(message);
         } catch (e) {
-          print("Error in onmessage handler: $e");
-          onerror?.call(StateError("Error in onmessage handler: $e"));
+          print("Error in onmessage handler: \$e");
+          onerror?.call(StateError("Error in onmessage handler: \$e"));
         }
       } catch (error) {
         final Error parseError = (error is Error)
             ? error
-            : StateError("Message parsing error: $error");
+                : StateError("Message parsing error: \$error");
         try {
           onerror?.call(parseError);
         } catch (e) {
-          print("Error in onerror handler: $e");
+          print("Error in onerror handler: \$e");
         }
         print(
-          "StdioClientTransport: Error processing read buffer: $parseError. Skipping data.",
+          "StdioClientTransport: Error processing read buffer: \$parseError. Skipping data.",
         );
         // Consider clearing buffer or attempting recovery depending on error type.
         // Clearing might be safest for unknown parsing errors.
@@ -269,14 +270,14 @@ class StdioClientTransport implements Transport {
 
   /// Internal handler for when the process exits.
   void _onProcessExit(int exitCode) {
-    print("StdioClientTransport: Process exited with code $exitCode.");
+    print("StdioClientTransport: Process exited with code \$exitCode.");
     // Only trigger cleanup if not already cleaning up
     if (!_isCleaningUp) {
       print(
         "StdioClientTransport: Process exited unexpectedly, initiating cleanup.",
       );
       final exitError = StateError(
-        "Process exited unexpectedly with code $exitCode.",
+        "Process exited unexpectedly with code \$exitCode.",
       );
       _reportError(exitError);
       unawaited(close()); // Initiate cleanup
@@ -291,7 +292,7 @@ class StdioClientTransport implements Transport {
 
   /// Internal handler for errors retrieving the process exit code.
   void _onProcessExitError(dynamic error, StackTrace stackTrace) {
-    print("StdioClientTransport: Error waiting for process exit: $error");
+    print("StdioClientTransport: Error waiting for process exit: \$error");
     // Only trigger cleanup if not already cleaning up
     if (!_isCleaningUp) {
       print(
@@ -300,7 +301,7 @@ class StdioClientTransport implements Transport {
       final Error exitError =
           (error is Error)
               ? error
-              : StateError("Process exit error: $error\n$stackTrace");
+              : StateError("Process exit error: \$error\n\$stackTrace");
       _reportError(exitError);
       unawaited(close()); // Initiate cleanup
     } else {
@@ -330,8 +331,9 @@ class StdioClientTransport implements Transport {
     // Check if already closed or never started properly
     if (!_started && _process == null) {
       print('StdioClientTransport: Already closed or never started.');
-      if (!_exitCompleter.isCompleted)
+      if (!_exitCompleter.isCompleted) {
         _exitCompleter.complete(); // Ensure completer finishes
+      }
       return;
     }
 
@@ -343,10 +345,10 @@ class StdioClientTransport implements Transport {
 
     // Cancel stream subscriptions safely
     await _stdoutSubscription?.cancel().catchError((e) {
-      print("StdioClientTransport: Error cancelling stdout subscription: $e");
+      print("StdioClientTransport: Error cancelling stdout subscription: \$e");
     });
     await _stderrSubscription?.cancel().catchError((e) {
-      print("StdioClientTransport: Error cancelling stderr subscription: $e");
+      print("StdioClientTransport: Error cancelling stderr subscription: \$e");
     });
     _stdoutSubscription = null;
     _stderrSubscription = null;
@@ -359,15 +361,15 @@ class StdioClientTransport implements Transport {
 
     if (processToKill != null) {
       print(
-        "StdioClientTransport: Terminating process (PID: ${processToKill.pid})...",
+        "StdioClientTransport: Terminating process (PID: \${processToKill.pid})...",
       );
       try {
         // Close stdin first to signal server if possible
         await processToKill.stdin.close().catchError((e) {
-          print("StdioClientTransport: Error closing process stdin: $e");
+          print("StdioClientTransport: Error closing process stdin: \$e");
         });
       } catch (e) {
-        print("StdioClientTransport: Exception closing process stdin: $e");
+        print("StdioClientTransport: Exception closing process stdin: \$e");
       }
 
       // Attempt graceful termination first
@@ -394,20 +396,20 @@ class StdioClientTransport implements Transport {
             processToKill.kill(io.ProcessSignal.sigkill);
           } catch (e) {
             print(
-              "StdioClientTransport: Error sending SIGKILL (process likely already exited): $e",
+              "StdioClientTransport: Error sending SIGKILL (process likely already exited): \$e",
             );
           }
         } catch (e) {
           // Error waiting for exit after SIGTERM (might have exited quickly)
           print(
-            "StdioClientTransport: Error waiting for process exit after SIGTERM: $e",
+            "StdioClientTransport: Error waiting for process exit after SIGTERM: \$e",
           );
           // Ensure SIGKILL if waiting failed unexpectedly
           try {
             processToKill.kill(io.ProcessSignal.sigkill);
           } catch (killErr) {
             print(
-              "StdioClientTransport: Error sending SIGKILL after wait error: $killErr",
+              "StdioClientTransport: Error sending SIGKILL after wait error: \$killErr",
             );
           }
         }
@@ -463,7 +465,7 @@ class StdioClientTransport implements Transport {
       final jsonString = serializeMessage(message);
       // Use kDebugMode or a logging framework for conditional printing
       // if (kDebugMode) {
-      //   print('StdioClientTransport SEND: $jsonString');
+      //   print('StdioClientTransport SEND: \$jsonString');
       // }
       currentStdin.write(
         jsonString,
@@ -473,15 +475,15 @@ class StdioClientTransport implements Transport {
       // Check if we are already cleaning up to avoid redundant actions/errors
       if (_isCleaningUp) {
         print(
-          "StdioClientTransport: Write error occurred during cleanup: $error",
+          "StdioClientTransport: Write error occurred during cleanup: \$error",
         );
         // Don't re-throw or re-cleanup if already cleaning up
         return;
       }
-      print("StdioClientTransport: Error writing to process stdin: $error");
+      print("StdioClientTransport: Error writing to process stdin: \$error");
       final Error sendError = (error is Error)
           ? error
-          : StateError("Process stdin write error: $error\n$stackTrace");
+              : StateError("Process stdin write error: \$error\n\$stackTrace");
 
       _reportError(sendError); // Use helper
 
@@ -493,24 +495,27 @@ class StdioClientTransport implements Transport {
       throw sendError; // Rethrow after initiating cleanup
     }
   }
-}
 
-// Helper to safely call onerror
-void _reportError(Error error) {
-  // Avoid reporting non-critical errors during cleanup? Optional.
-  // if (_isCleaningUp) return;
-  try {
-    onerror?.call(error);
-  } catch (e, s) {
-    print("StdioClientTransport: Error in onerror handler: $e\n$s");
-  }
-}
+  // --- MOVE HELPER METHODS INSIDE THE CLASS ---
 
-// Helper to safely call onclose
-void _reportClose() {
-  try {
-    onclose?.call();
-  } catch (e, s) {
-    print("StdioClientTransport: Error in onclose handler: $e\n$s");
+  // Helper to safely call onerror
+  void _reportError(Error error) {
+    // Avoid reporting non-critical errors during cleanup? Optional.
+    // if (_isCleaningUp) return;
+    try {
+      onerror?.call(error); // Now accesses the instance member
+    } catch (e, s) {
+      print("StdioClientTransport: Error in onerror handler: \$e\n\$s");
+    }
   }
-}
+
+  // Helper to safely call onclose
+  void _reportClose() {
+    try {
+      onclose?.call(); // Now accesses the instance member
+    } catch (e, s) {
+      print("StdioClientTransport: Error in onclose handler: \$e\n\$s");
+    }
+  }
+  // --- END MOVED HELPER METHODS ---
+} // End of StdioClientTransport class
