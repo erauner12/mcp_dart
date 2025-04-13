@@ -91,9 +91,11 @@ JsonRpcMessage deserializeMessage(String line) {
 /// Assumes the [message] object has a valid `toJson()` method.
 String serializeMessage(JsonRpcMessage message) {
   try {
+    // Ensure a newline is always appended
     return '${jsonEncode(message.toJson())}\n';
-  } catch (e) {
-    print("Failed to serialize JsonRpcMessage: $message");
+  } catch (e, s) {
+    print("Failed to serialize JsonRpcMessage: $message\n$s");
+    // Consider throwing a specific serialization error type
     rethrow;
   }
 }

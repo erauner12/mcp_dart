@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert'; // For utf8 encoding if needed
 import 'dart:io' as io; // Use 'io' prefix
 import 'dart:typed_data'; // For Uint8List
+// Potentially needed for kDebugMode, if not already imported transitively
+// import 'package:flutter/foundation.dart'; // Use kDebugMode
 
 // Assume shared stdio helpers are defined in shared/stdio.dart
 import 'package:mcp_dart/src/shared/stdio.dart'; // Adjust import path as needed
@@ -70,6 +72,9 @@ class StdioClientTransport implements Transport {
   /// Flag to prevent multiple starts.
   bool _started = false;
 
+  // ADD: Flag to prevent concurrent cleanup
+  bool _isCleaningUp = false;
+
   /// Subscriptions to the process's stdout and stderr streams.
   StreamSubscription<List<int>>? _stdoutSubscription;
   StreamSubscription<List<int>>?
@@ -110,6 +115,7 @@ class StdioClientTransport implements Transport {
       );
     }
     _started = true;
+    _isCleaningUp = false; // Reset cleanup flag on new start attempt
 
     final mode = (_serverParams.stderrMode == io.ProcessStartMode.normal)
         ? io.ProcessStartMode.normal // Use normal for pipe access
@@ -123,7 +129,8 @@ class StdioClientTransport implements Transport {
         workingDirectory: _serverParams.workingDirectory,
         environment:
             _serverParams.environment, // Use provided or inherit Dart default
-        runInShell: false, // Generally safer
+        // Assuming runInShell is false based on previous code
+        runInShell: false,
         mode: mode, // Handles stdin/stdout/stderr piping/inheritance
       );
 
@@ -136,26 +143,35 @@ class StdioClientTransport implements Transport {
         _onStdoutData,
         onError: _onStreamError,
         onDone: _onStdoutDone,
-        cancelOnError: false,
+        cancelOnError: false, // Handle errors explicitly
       );
 
       // Listen to stderr if piped
       if (_serverParams.stderrMode == io.ProcessStartMode.normal) {
-        // Expose stderr via getter, let user handle it.
-        // Optionally add logging here:
         _stderrSubscription = _process!.stderr.listen(
-          (data) => print(
-            "Server stderr: ${utf8.decode(data, allowMalformed: true)}",
-          ),
+          (data) {
+            // Log stderr, potentially report as non-fatal error?
+            final errorMsg = utf8.decode(data, allowMalformed: true);
+            print("Server stderr: $errorMsg");
+            // Optionally report stderr content via onerror
+            // _reportError(StateError("Server stderr: $errorMsg"));
+          },
           onError: _onStreamError, // Report stderr stream errors too
+          onDone: () {
+            print("StdioClientTransport: Process stderr closed.");
+          },
+          cancelOnError: false,
         );
       }
 
-      // Handle process exit
-      _process!.exitCode.then(_onProcessExit).catchError(_onProcessExitError);
+      // Handle process exit without awaiting here
+      unawaited(
+        _process!.exitCode.then(_onProcessExit).catchError(_onProcessExitError),
+      );
 
       // Start successful
       return Future.value();
+
     } catch (error, stackTrace) {
       // Handle errors during Process.start()
       print("StdioClientTransport: Failed to start process: $error");
@@ -163,11 +179,8 @@ class StdioClientTransport implements Transport {
       final startError = StateError(
         "Failed to start server process: $error\n$stackTrace",
       );
-      try {
-        onerror?.call(startError);
-      } catch (e) {
-        print("Error in onerror handler: $e");
-      }
+      _reportError(startError); // Use helper to report error
+      await close(); // Attempt cleanup immediately on start failure
       throw startError; // Rethrow to signal failure
     }
   }
@@ -194,23 +207,32 @@ class StdioClientTransport implements Transport {
   /// Internal handler for when the process's stdout stream closes.
   void _onStdoutDone() {
     print("StdioClientTransport: Process stdout closed.");
-    // Consider if this should trigger close() - depends if server exiting is expected.
-    // Maybe only close if the process has also exited?
-    // close(); // Optionally close transport when stdout ends
+    // If stdout closes unexpectedly (i.e., not during cleanup), trigger cleanup.
+    if (!_isCleaningUp) {
+      print(
+        "StdioClientTransport: Stdout closed unexpectedly, initiating cleanup.",
+      );
+      _reportError(StateError("Process stdout closed unexpectedly."));
+      unawaited(close());
+    }
   }
 
   /// Internal handler for errors on process stdout/stderr streams.
   void _onStreamError(dynamic error, StackTrace stackTrace) {
+    // Ignore stream errors if we are already cleaning up, as they are expected
+    if (_isCleaningUp) {
+      print(
+        "StdioClientTransport: Stream error occurred during cleanup: $error",
+      );
+      return;
+    }
+    print("StdioClientTransport: Stream error occurred: $error");
     final Error streamError = (error is Error)
         ? error
         : StateError("Process stream error: $error\n$stackTrace");
-    try {
-      onerror?.call(streamError);
-    } catch (e) {
-      print("Error in onerror handler: $e");
-    }
-    // Consider if stream errors should trigger close()
-    // close();
+    _reportError(streamError);
+    // Consider if stream errors should trigger close() - often yes
+    unawaited(close());
   }
 
   /// Internal handler processing buffered stdout data for messages.
@@ -248,27 +270,48 @@ class StdioClientTransport implements Transport {
   /// Internal handler for when the process exits.
   void _onProcessExit(int exitCode) {
     print("StdioClientTransport: Process exited with code $exitCode.");
-    if (!_exitCompleter.isCompleted) {
-      _exitCompleter.complete(); // Signal exit if not already closing
+    // Only trigger cleanup if not already cleaning up
+    if (!_isCleaningUp) {
+      print(
+        "StdioClientTransport: Process exited unexpectedly, initiating cleanup.",
+      );
+      final exitError = StateError(
+        "Process exited unexpectedly with code $exitCode.",
+      );
+      _reportError(exitError);
+      unawaited(close()); // Initiate cleanup
+    } else {
+      print("StdioClientTransport: Process exited during cleanup sequence.");
     }
-    close(); // Ensure transport is cleaned up on process exit
+    // Ensure the completer is finished regardless
+    if (!_exitCompleter.isCompleted) {
+      _exitCompleter.complete();
+    }
   }
 
   /// Internal handler for errors retrieving the process exit code.
   void _onProcessExitError(dynamic error, StackTrace stackTrace) {
     print("StdioClientTransport: Error waiting for process exit: $error");
-    final Error exitError = (error is Error)
-        ? error
-        : StateError("Process exit error: $error\n$stackTrace");
-    try {
-      onerror?.call(exitError);
-    } catch (e) {
-      print("Error in onerror handler: $e");
+    // Only trigger cleanup if not already cleaning up
+    if (!_isCleaningUp) {
+      print(
+        "StdioClientTransport: Error waiting for exit, initiating cleanup.",
+      );
+      final Error exitError =
+          (error is Error)
+              ? error
+              : StateError("Process exit error: $error\n$stackTrace");
+      _reportError(exitError);
+      unawaited(close()); // Initiate cleanup
+    } else {
+      print(
+        "StdioClientTransport: Error waiting for process exit during cleanup sequence.",
+      );
     }
+    // Ensure the completer is finished with an error regardless
     if (!_exitCompleter.isCompleted) {
-      _exitCompleter.completeError(exitError);
+      _exitCompleter.completeError(error, stackTrace);
     }
-    close(); // Ensure cleanup even on exit code error
   }
 
   /// Closes the transport connection by terminating the server process
@@ -277,16 +320,34 @@ class StdioClientTransport implements Transport {
   /// Sends a SIGTERM signal (or SIGKILL on timeout/Windows) to the process.
   @override
   Future<void> close() async {
-    if (!_started) return; // Already closed or never started
+    // Prevent concurrent cleanup
+    if (_isCleaningUp) {
+      print('StdioClientTransport: Cleanup already in progress, skipping.');
+      return _exitCompleter
+          .future; // Return existing future if cleanup is running
+    }
 
+    // Check if already closed or never started properly
+    if (!_started && _process == null) {
+      print('StdioClientTransport: Already closed or never started.');
+      if (!_exitCompleter.isCompleted)
+        _exitCompleter.complete(); // Ensure completer finishes
+      return;
+    }
+
+    _isCleaningUp = true; // Set flag immediately
     print("StdioClientTransport: Closing transport...");
 
-    // Mark as closing immediately to prevent further sends/starts
+    // Mark as not started *after* setting the cleanup flag
     _started = false;
 
-    // Cancel stream subscriptions
-    await _stdoutSubscription?.cancel();
-    await _stderrSubscription?.cancel();
+    // Cancel stream subscriptions safely
+    await _stdoutSubscription?.cancel().catchError((e) {
+      print("StdioClientTransport: Error cancelling stdout subscription: $e");
+    });
+    await _stderrSubscription?.cancel().catchError((e) {
+      print("StdioClientTransport: Error cancelling stderr subscription: $e");
+    });
     _stdoutSubscription = null;
     _stderrSubscription = null;
 
@@ -294,12 +355,21 @@ class StdioClientTransport implements Transport {
 
     // Terminate the process
     final processToKill = _process;
-    _process = null; // Clear reference
+    _process = null; // Clear reference early
 
     if (processToKill != null) {
       print(
         "StdioClientTransport: Terminating process (PID: ${processToKill.pid})...",
       );
+      try {
+        // Close stdin first to signal server if possible
+        await processToKill.stdin.close().catchError((e) {
+          print("StdioClientTransport: Error closing process stdin: $e");
+        });
+      } catch (e) {
+        print("StdioClientTransport: Exception closing process stdin: $e");
+      }
+
       // Attempt graceful termination first
       bool killed = processToKill.kill(io.ProcessSignal.sigterm);
       if (!killed) {
@@ -312,67 +382,135 @@ class StdioClientTransport implements Transport {
         // Give a short grace period for SIGTERM before SIGKILL
         try {
           await _exitCompleter.future.timeout(const Duration(seconds: 2));
-          print("StdioClientTransport: Process terminated gracefully.");
+          print(
+            "StdioClientTransport: Process terminated gracefully after SIGTERM.",
+          );
         } on TimeoutException {
           print(
             "StdioClientTransport: Process did not exit after SIGTERM, sending SIGKILL.",
           );
-          processToKill.kill(io.ProcessSignal.sigkill); // Force kill
+          try {
+            // Attempt to kill again, ignore error if already exited
+            processToKill.kill(io.ProcessSignal.sigkill);
+          } catch (e) {
+            print(
+              "StdioClientTransport: Error sending SIGKILL (process likely already exited): $e",
+            );
+          }
         } catch (e) {
           // Error waiting for exit after SIGTERM (might have exited quickly)
           print(
             "StdioClientTransport: Error waiting for process exit after SIGTERM: $e",
           );
+          // Ensure SIGKILL if waiting failed unexpectedly
+          try {
+            processToKill.kill(io.ProcessSignal.sigkill);
+          } catch (killErr) {
+            print(
+              "StdioClientTransport: Error sending SIGKILL after wait error: $killErr",
+            );
+          }
         }
       }
+    } else {
+      print("StdioClientTransport: Process was already null during cleanup.");
     }
 
     // Ensure exit completer is finished if not already
     if (!_exitCompleter.isCompleted) {
+      print("StdioClientTransport: Completing exit completer during cleanup.");
       _exitCompleter.complete();
     }
 
     // Invoke the onclose callback
-    try {
-      onclose?.call();
-    } catch (e) {
-      print("Error in onclose handler: $e");
-    }
+    _reportClose(); // Use helper
+
     print("StdioClientTransport: Transport closed.");
+
+    // Resetting _isCleaningUp can be complex. Generally safer to leave it true
+    // after the first successful cleanup, unless restart logic is needed.
+    // If cleanup needs to be retryable, reset it here:
+    // _isCleaningUp = false;
+
+    // Return the completer's future
+    return _exitCompleter.future;
   }
 
   /// Sends a [JsonRpcMessage] to the server process via its stdin.
   ///
   /// Serializes the message to JSON with a newline and writes it to the
   /// process's stdin stream. Throws [StateError] if the transport is not started
-  /// or the process is not running.
+  /// or the process is not running or stdin is unavailable.
   @override
   Future<void> send(JsonRpcMessage message) async {
     final currentProcess = _process; // Capture locally
-    if (!_started || currentProcess == null) {
-      throw StateError(
-        "Cannot send message: StdioClientTransport is not running.",
-      );
+    final currentStdin = currentProcess?.stdin; // Capture stdin locally
+
+    // Check if started, process exists, and stdin is available
+    if (!_started || currentProcess == null || currentStdin == null) {
+      final errorMsg =
+          "StdioClientTransport cannot send: Not started, process is null, or stdin is unavailable.";
+      print(errorMsg);
+      // Don't throw if cleaning up, just log and return
+      if (_isCleaningUp) {
+        print("StdioClientTransport: Attempted send during cleanup, ignoring.");
+        return;
+      }
+      throw StateError(errorMsg);
     }
 
     try {
       final jsonString = serializeMessage(message);
-      currentProcess.stdin.write(jsonString);
-      // Flushing stdin might be necessary depending on the server's reading behavior.
-      await currentProcess.stdin.flush();
+      // Use kDebugMode or a logging framework for conditional printing
+      // if (kDebugMode) {
+      //   print('StdioClientTransport SEND: $jsonString');
+      // }
+      currentStdin.write(
+        jsonString,
+      ); // Use write, serializeMessage adds newline
+      await currentStdin.flush(); // Ensure data is sent
     } catch (error, stackTrace) {
+      // Check if we are already cleaning up to avoid redundant actions/errors
+      if (_isCleaningUp) {
+        print(
+          "StdioClientTransport: Write error occurred during cleanup: $error",
+        );
+        // Don't re-throw or re-cleanup if already cleaning up
+        return;
+      }
       print("StdioClientTransport: Error writing to process stdin: $error");
       final Error sendError = (error is Error)
           ? error
           : StateError("Process stdin write error: $error\n$stackTrace");
-      try {
-        onerror?.call(sendError);
-      } catch (e) {
-        print("Error in onerror handler: $e");
-      }
-      // Consider closing the transport on stdin write failure
-      close();
-      throw sendError; // Rethrow after cleanup attempt
+
+      _reportError(sendError); // Use helper
+
+      // Initiate cleanup if write fails, as the connection is likely broken
+      unawaited(
+        close(),
+      ); // Use unawaited as cleanup is async but we don't need its result here
+
+      throw sendError; // Rethrow after initiating cleanup
     }
+  }
+}
+
+// Helper to safely call onerror
+void _reportError(Error error) {
+  // Avoid reporting non-critical errors during cleanup? Optional.
+  // if (_isCleaningUp) return;
+  try {
+    onerror?.call(error);
+  } catch (e, s) {
+    print("StdioClientTransport: Error in onerror handler: $e\n$s");
+  }
+}
+
+// Helper to safely call onclose
+void _reportClose() {
+  try {
+    onclose?.call();
+  } catch (e, s) {
+    print("StdioClientTransport: Error in onclose handler: $e\n$s");
   }
 }
