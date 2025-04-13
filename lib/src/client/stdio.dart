@@ -79,7 +79,7 @@ class StdioClientTransport implements Transport {
   /// Subscriptions to the process's stdout and stderr streams.
   StreamSubscription<List<int>>? _stdoutSubscription;
   StreamSubscription<List<int>>?
-  _stderrSubscription; // Only used if stderrMode is pipe
+      _stderrSubscription; // Only used if stderrMode is pipe
 
   /// Callback for when the connection (process) is closed.
   @override
@@ -172,7 +172,6 @@ class StdioClientTransport implements Transport {
 
       // Start successful
       return Future.value();
-
     } catch (error, stackTrace) {
       // Handle errors during Process.start()
       print("StdioClientTransport: Failed to start process: \$error");
@@ -230,7 +229,7 @@ class StdioClientTransport implements Transport {
     print("StdioClientTransport: Stream error occurred: \$error");
     final Error streamError = (error is Error)
         ? error
-            : StateError("Process stream error: \$error\n\$stackTrace");
+        : StateError("Process stream error: \$error\n\$stackTrace");
     _reportError(streamError);
     // Consider if stream errors should trigger close() - often yes
     unawaited(close());
@@ -251,7 +250,7 @@ class StdioClientTransport implements Transport {
       } catch (error) {
         final Error parseError = (error is Error)
             ? error
-                : StateError("Message parsing error: \$error");
+            : StateError("Message parsing error: \$error");
         try {
           onerror?.call(parseError);
         } catch (e) {
@@ -298,10 +297,9 @@ class StdioClientTransport implements Transport {
       print(
         "StdioClientTransport: Error waiting for exit, initiating cleanup.",
       );
-      final Error exitError =
-          (error is Error)
-              ? error
-              : StateError("Process exit error: \$error\n\$stackTrace");
+      final Error exitError = (error is Error)
+          ? error
+          : StateError("Process exit error: \$error\n\$stackTrace");
       _reportError(exitError);
       unawaited(close()); // Initiate cleanup
     } else {
@@ -429,12 +427,6 @@ class StdioClientTransport implements Transport {
 
     print("StdioClientTransport: Transport closed.");
 
-    // Resetting _isCleaningUp can be complex. Generally safer to leave it true
-    // after the first successful cleanup, unless restart logic is needed.
-    // If cleanup needs to be retryable, reset it here:
-    // _isCleaningUp = false;
-
-    // Return the completer's future
     return _exitCompleter.future;
   }
 
@@ -483,27 +475,26 @@ class StdioClientTransport implements Transport {
       print("StdioClientTransport: Error writing to process stdin: \$error");
       final Error sendError = (error is Error)
           ? error
-              : StateError("Process stdin write error: \$error\n\$stackTrace");
+          : StateError("Process stdin write error: \$error\n\$stackTrace");
 
       _reportError(sendError); // Use helper
 
       // Initiate cleanup if write fails, as the connection is likely broken
       unawaited(
-        close(),
-      ); // Use unawaited as cleanup is async but we don't need its result here
+          close()); // Use unawaited as cleanup is async but we don't need its result here
 
       throw sendError; // Rethrow after initiating cleanup
     }
   }
 
-  // --- MOVE HELPER METHODS INSIDE THE CLASS ---
+  // --- HELPER METHODS MUST BE INSIDE THE CLASS ---
 
   // Helper to safely call onerror
   void _reportError(Error error) {
     // Avoid reporting non-critical errors during cleanup? Optional.
     // if (_isCleaningUp) return;
     try {
-      onerror?.call(error); // Now accesses the instance member
+      onerror?.call(error); // Accesses the instance member 'onerror'
     } catch (e, s) {
       print("StdioClientTransport: Error in onerror handler: \$e\n\$s");
     }
@@ -512,10 +503,10 @@ class StdioClientTransport implements Transport {
   // Helper to safely call onclose
   void _reportClose() {
     try {
-      onclose?.call(); // Now accesses the instance member
+      onclose?.call(); // Accesses the instance member 'onclose'
     } catch (e, s) {
       print("StdioClientTransport: Error in onclose handler: \$e\n\$s");
     }
   }
-  // --- END MOVED HELPER METHODS ---
-} // End of StdioClientTransport class
+  // --- END HELPER METHODS ---
+} // <<< Closing brace for the StdioClientTransport class. Helpers must be ABOVE this line.
